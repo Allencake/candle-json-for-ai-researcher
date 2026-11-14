@@ -1,0 +1,57 @@
+//@version=5
+// Candle JSON — 只把已经收盘的 K 线打成 JSON，再用 alert() 发出去。
+// 这个指标不给多空信号，不画开平仓，不判断涨跌。
+//
+// 用法：
+// 1. 把本脚本贴进 Pine Editor，Add to chart。
+// 2. 创建警报，条件选 "Any alert() function call"，频率用 Once Per Bar Close。
+// 3. Notifications 里打开 Webhook URL，填接收端地址（只要 HTTP POST JSON）。
+// 注意：TradingView 的 webhook 需要付费套餐，并且账户要打开 2FA。
+// 真实推送只走 80/443 端口；本仓库的本地模拟用的是普通端口，仅供自测。
+
+indicator("Candle JSON", shorttitle="CandleJSON", overlay=true, max_labels_count=0)
+
+// 长度写死，保证发出去的字段永远是 ema20 / ema50 / atr14，接收端不用猜。
+const int EMA_FAST = 20
+const int EMA_SLOW = 50
+const int ATR_LEN  = 14
+
+ema20 = ta.ema(close, EMA_FAST)
+ema50 = ta.ema(close, EMA_SLOW)
+atr14 = ta.atr(ATR_LEN)
+
+// 和 TradingView 自定义格式 "#.########" 一样：最多 8 位小数，去掉末尾 0。
+f_num(float x) =>
+    str.tostring(x, "#.########")
+
+f_json() =>
+    "{"
+     + "\"symbol\":\"" + syminfo.ticker + "\""
+     + ",\"tf\":\"" + timeframe.period + "\""
+     + ",\"time\":" + str.tostring(time)
+     + ",\"o\":" + f_num(open)
+     + ",\"h\":" + f_num(high)
+     + ",\"l\":" + f_num(low)
+     + ",\"c\":" + f_num(close)
+     + ",\"v\":" + f_num(volume)
+     + ",\"ema20\":" + f_num(ema20)
+     + ",\"ema50\":" + f_num(ema50)
+     + ",\"atr14\":" + f_num(atr14)
+     + "}"
+
+jsonMsg = f_json()
+
+// 只在收盘确认后发一次。均线或 ATR 还没形成时不发，避免把 na 打进 JSON。
+ready = not na(ema20) and not na(ema50) and not na(atr14)
+if barstate.isconfirmed and ready
+    alert(jsonMsg, alert.freq_once_per_bar_close)
+
+// 图上只留两条均线，方便核对数值。不要加 plotshape / 箭头 / 多空底色。
+plot(ema20, "EMA20", color=color.new(color.orange, 0), linewidth=1)
+plot(ema50, "EMA50", color=color.new(color.teal, 0), linewidth=1)
+
+// 右下角预览最近一根已收盘 JSON，便于对照接收端日志。
+var table preview = table.new(position.bottom_right, 1, 2, frame_color=color.new(color.gray, 60), frame_width=1)
+if barstate.islast and ready
+    table.cell(preview, 0, 0, "last closed JSON (research only, never order)", text_color=color.new(color.gray, 0), text_size=size.tiny, bgcolor=color.new(color.black, 30))
+    table.cell(preview, 0, 1, jsonMsg, text_color=color.new(color.white, 0), text_size=size.tiny, bgcolor=color.new(color.black, 30))
