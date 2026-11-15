@@ -1,0 +1,326 @@
+//@version=6
+// ─────────────────────────────────────────────────────────────────────────────
+//  K线转JSON · AI 研究台   (数据包格式 candle-json/v2)
+//
+//  每根 K 线收盘后，把这根 K 线和它的上下文打包成一行 JSON，
+//  通过 TradingView 的 alert() → Webhook 发给你的 AI 研究员。
+//
+//  图上的入场 / 止损 / 目标只是“纸面风险地图”，方便复盘。
+//  这个脚本不下单，也没有任何下单能力；做不做、做多少，由你自己决定。
+//
+//  MIT License · https://github.com/Allencake/candle-json-for-ai-researcher
+// ─────────────────────────────────────────────────────────────────────────────
+indicator("K线转JSON · AI研究台", shorttitle = "CJ研究台", overlay = true, max_bars_back = 100, max_boxes_count = 200, max_labels_count = 300, max_lines_count = 100)
+
+// ───── 输入项 ─────
+G_SIG = "信号"
+thr     = input.int(70, "出信号分数线", minval = 50, maxval = 100, group = G_SIG)
+blockHV = input.bool(true, "高波动时不出信号", group = G_SIG)
+htfTf   = input.timeframe("240", "大周期", group = G_SIG)
+htfLen  = input.int(50, "大周期 EMA 长度", minval = 2, group = G_SIG)
+
+G_TR = "趋势与动量"
+fastLen = input.int(20, "EMA 快线", minval = 2, group = G_TR)
+midLen  = input.int(50, "EMA 中线", minval = 2, group = G_TR)
+slowLen = input.int(200, "EMA 慢线", minval = 2, group = G_TR)
+rsiLen  = input.int(14, "RSI 长度", minval = 2, group = G_TR)
+adxLen  = input.int(14, "ADX / DMI 长度", minval = 2, group = G_TR)
+adxMin  = input.float(20.0, "ADX 趋势门槛", group = G_TR)
+
+G_VO = "波动与量能"
+volLen  = input.int(20, "均量长度", minval = 2, group = G_VO)
+atrLen  = input.int(14, "ATR 长度", minval = 2, group = G_VO)
+rankLen = input.int(100, "ATR 百分位回看", minval = 20, group = G_VO)
+hvPct   = input.float(90.0, "高波动百分位", group = G_VO)
+
+G_RK = "结构与纸面风险"
+swingLen = input.int(5, "摆动点左右根数", minval = 2, group = G_RK)
+stopAtr  = input.float(1.5, "止损距离 = ATR ×", minval = 0.1, step = 0.1, group = G_RK)
+t1R      = input.float(1.5, "目标1（R）", minval = 0.5, step = 0.5, group = G_RK)
+t2R      = input.float(3.0, "目标2（R）", minval = 0.5, step = 0.5, group = G_RK)
+
+G_OUT = "数据包与面板"
+sendMode  = input.string("每根K线", "发送时机", options = ["每根K线", "只发信号和更新"], group = G_OUT)
+showPanel = input.bool(true, "显示研究面板", group = G_OUT)
+panelPos  = input.string("右上", "面板位置", options = ["右上", "右下", "左上"], group = G_OUT)
+showBoxes = input.bool(true, "显示纸面风险框", group = G_OUT)
+showSwing = input.bool(true, "显示摆动点和结构突破", group = G_OUT)
+
+// ───── 颜色 ─────
+C_UP   = #3fb950
+C_DN   = #e5534b
+C_FAST = #58a6ff
+C_MID  = #f0b429
+C_SLOW = #bc8cff
+C_LVL  = #d29922
+C_TXT  = #e6edf3
+C_DIM  = #8b949e
+C_BG   = #0d1117
+
+// ───── 小工具：拼 JSON ─────
+f_px(float x) => na(x) ? "null" : str.tostring(math.round_to_mintick(x), "0.########")
+f_num(float x, string fmt) => na(x) ? "null" : str.tostring(x, fmt)
+f_str(string s) => "\"" + s + "\""
+f_bool(bool b) => b ? "true" : "false"
+f_kv(string k, string v) => "\"" + k + "\":" + v
+
+// ───── 中文名（面板用） ─────
+f_zhRegime(string r) =>
+    switch r
+        "TREND_UP"   => "上升趋势"
+        "TREND_DOWN" => "下降趋势"
+        "HIGH_VOL"   => "高波动"
+        => "震荡"
+
+f_zhPattern(string p) =>
+    switch p
+        "DOJI"          => "十字星"
+        "BULL_ENGULF"   => "看涨吞没"
+        "BEAR_ENGULF"   => "看跌吞没"
+        "HAMMER"        => "锤子线"
+        "SHOOTING_STAR" => "射击之星"
+        "BULL_MARUBOZU" => "光头阳线"
+        "BEAR_MARUBOZU" => "光头阴线"
+        "INSIDE"        => "内包线"
+        => "普通K线"
+
+f_zhStatus(string s) =>
+    switch s
+        "OPEN"      => "纸面持仓中"
+        "T1_HIT"    => "目标1到达 · 止损移到入场"
+        "T2_HIT"    => "目标2到达 · 已结束"
+        "STOPPED"   => "止损 · 已结束"
+        "BREAKEVEN" => "保本离场 · 已结束"
+        => "无纸面单"
+
+// ───── 指标 ─────
+emaF = ta.ema(close, fastLen)
+emaM = ta.ema(close, midLen)
+emaS = ta.ema(close, slowLen)
+rsiV = ta.rsi(close, rsiLen)
+[macdLine, sigLine, macdHist] = ta.macd(close, 12, 26, 9)
+[diP, diM, adxV] = ta.dmi(adxLen, adxLen)
+atrV    = ta.atr(atrLen)
+atrRank = ta.percentrank(atrV, rankLen)
+volAvg  = ta.sma(volume, volLen)
+relVol  = volAvg > 0 ? volume / volAvg : na
+vwapV   = ta.vwap(hlc3)
+
+// 大周期与前一日：只取已经收完的那根（[1] + lookahead_on），不偷看未来
+[htfC, htfE] = request.security(syminfo.tickerid, htfTf, [close[1], ta.ema(close, htfLen)[1]], lookahead = barmerge.lookahead_on)
+[pdh, pdl]   = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+htfHigher = timeframe.in_seconds(htfTf) > timeframe.in_seconds(timeframe.period)
+htfBias   = not htfHigher or na(htfE) ? "N/A" : htfC > htfE ? "UP" : htfC < htfE ? "DOWN" : "FLAT"
+
+// ───── K 线拆解 ─────
+rng      = high - low
+body     = math.abs(close - open)
+upW      = high - math.max(open, close)
+loW      = math.min(open, close) - low
+bodyPct  = rng > 0 ? 100 * body / rng : 0.0
+upPct    = rng > 0 ? 100 * upW / rng : 0.0
+loPct    = rng > 0 ? 100 * loW / rng : 0.0
+rngAtr   = atrV > 0 ? rng / atrV : na
+closePos = rng > 0 ? 100 * (close - low) / rng : 50.0
+gapPct   = 100 * (open - close[1]) / close[1]
+dirTxt   = close > open ? "bull" : close < open ? "bear" : "flat"
+
+bullEng = close > open and close[1] < open[1] and close >= open[1] and open <= close[1] and body > body[1]
+bearEng = close < open and close[1] > open[1] and close <= open[1] and open >= close[1] and body > body[1]
+hammer  = loW >= 2 * body and upW <= 0.3 * rng
+star    = upW >= 2 * body and loW <= 0.3 * rng
+inside  = high < high[1] and low > low[1]
+pattern = rng <= 0 ? "NONE" : body <= 0.1 * rng ? "DOJI" : bullEng ? "BULL_ENGULF" : bearEng ? "BEAR_ENGULF" : hammer ? "HAMMER" : star ? "SHOOTING_STAR" : body >= 0.85 * rng ? (close > open ? "BULL_MARUBOZU" : "BEAR_MARUBOZU") : inside ? "INSIDE" : "NONE"
+
+// ───── 趋势 / 市场状态 ─────
+stack  = emaF > emaM and emaM > emaS ? "BULL" : emaF < emaM and emaM < emaS ? "BEAR" : "MIXED"
+slopeV = emaS - emaS[5]
+slope  = slopeV > 0.0002 * close ? "UP" : slopeV < -0.0002 * close ? "DOWN" : "FLAT"
+regime = atrRank >= hvPct ? "HIGH_VOL" : adxV >= adxMin and emaF > emaM and close > emaS ? "TREND_UP" : adxV >= adxMin and emaF < emaM and close < emaS ? "TREND_DOWN" : "RANGE"
+ready  = not na(emaS) and not na(emaS[5]) and not na(adxV) and not na(atrRank) and not na(macdHist[1]) and not na(relVol)
+
+// ───── 结构：摆动高低点 + 突破 ─────
+ph = ta.pivothigh(high, swingLen, swingLen)
+pl = ta.pivotlow(low, swingLen, swingLen)
+var float swingH = na
+var float swingL = na
+var bool shBroken = true
+var bool slBroken = true
+var string lastBreak = "NONE"
+var int lastBreakBar = na
+if not na(ph)
+    swingH := ph
+    shBroken := false
+if not na(pl)
+    swingL := pl
+    slBroken := false
+string brk = "NONE"
+if not na(swingH) and not shBroken and close > swingH
+    brk := "BREAK_UP"
+    shBroken := true
+else if not na(swingL) and not slBroken and close < swingL
+    brk := "BREAK_DOWN"
+    slBroken := true
+if brk != "NONE"
+    lastBreak := brk
+    lastBreakBar := bar_index
+
+// ───── 多空分（满分 100：趋势25 动量20 强度15 量能15 大周期25） ─────
+isBull = close > open
+isBear = close < open
+histUp = macdHist > macdHist[1]
+
+lTrend = (emaF > emaM ? 10 : 0) + (emaM > emaS ? 5 : 0) + (close > emaF ? 10 : 0)
+lMom   = (rsiV > 50 and rsiV < 70 ? 10 : 0) + (macdHist > 0 ? 5 : 0) + (histUp ? 5 : 0)
+lStr   = (diP > diM ? 7 : 0) + (diP > diM and adxV >= adxMin ? 8 : 0)
+lVol   = isBull and relVol >= 1.2 ? 15 : isBull and relVol >= 1.0 ? 8 : 0
+lHtf   = htfBias == "UP" ? 25 : htfBias == "FLAT" ? 10 : 0
+
+sTrend = (emaF < emaM ? 10 : 0) + (emaM < emaS ? 5 : 0) + (close < emaF ? 10 : 0)
+sMom   = (rsiV > 30 and rsiV < 50 ? 10 : 0) + (macdHist < 0 ? 5 : 0) + (not histUp ? 5 : 0)
+sStr   = (diM > diP ? 7 : 0) + (diM > diP and adxV >= adxMin ? 8 : 0)
+sVol   = isBear and relVol >= 1.2 ? 15 : isBear and relVol >= 1.0 ? 8 : 0
+sHtf   = htfBias == "DOWN" ? 25 : htfBias == "FLAT" ? 10 : 0
+
+longScore  = ready ? lTrend + lMom + lStr + lVol + lHtf : 0
+shortScore = ready ? sTrend + sMom + sStr + sVol + sHtf : 0
+
+// ───── 纸面记账（只在收盘确认后更新，不重绘） ─────
+var string pSide   = "NONE"
+var string pStatus = "FLAT"
+var float  pEntry  = na
+var float  pStop   = na
+var float  pT1     = na
+var float  pT2     = na
+var float  pRisk   = na
+var int    pBars   = 0
+var box    riskBox = na
+var box    rewBox  = na
+var line   t1Line  = na
+
+string upd = "NONE"
+wasLive = pStatus == "OPEN" or pStatus == "T1_HIT"
+if barstate.isconfirmed and wasLive
+    string before = pStatus
+    pBars += 1
+    if pSide == "LONG"
+        if low <= pStop
+            pStatus := pStatus == "T1_HIT" ? "BREAKEVEN" : "STOPPED"
+        else if high >= pT2
+            pStatus := "T2_HIT"
+        else if pStatus == "OPEN" and high >= pT1
+            pStatus := "T1_HIT"
+            pStop := pEntry
+    else
+        if high >= pStop
+            pStatus := pStatus == "T1_HIT" ? "BREAKEVEN" : "STOPPED"
+        else if low <= pT2
+            pStatus := "T2_HIT"
+        else if pStatus == "OPEN" and low <= pT1
+            pStatus := "T1_HIT"
+            pStop := pEntry
+    if pStatus != before
+        upd := pStatus
+    if showBoxes and not na(riskBox)
+        box.set_right(riskBox, bar_index)
+        box.set_right(rewBox, bar_index)
+        line.set_x2(t1Line, bar_index)
+
+string evt = upd != "NONE" ? "PAPER_UPDATE" : "BAR_CLOSE"
+liveNow  = pStatus == "OPEN" or pStatus == "T1_HIT"
+canSetup = ready and barstate.isconfirmed and not liveNow and not (blockHV and regime == "HIGH_VOL")
+longSetup  = canSetup and longScore >= thr and longScore[1] < thr and longScore > shortScore
+shortSetup = canSetup and not longSetup and shortScore >= thr and shortScore[1] < thr and shortScore > longScore
+
+if longSetup or shortSetup
+    float sgn = longSetup ? 1.0 : -1.0
+    pSide   := longSetup ? "LONG" : "SHORT"
+    pStatus := "OPEN"
+    pEntry  := close
+    pRisk   := stopAtr * atrV
+    pStop   := close - sgn * pRisk
+    pT1     := close + sgn * t1R * pRisk
+    pT2     := close + sgn * t2R * pRisk
+    pBars   := 0
+    evt     := longSetup ? "SETUP_LONG" : "SETUP_SHORT"
+    if showBoxes
+        riskBox := box.new(bar_index, math.max(pEntry, pStop), bar_index + 1, math.min(pEntry, pStop), border_color = color.new(C_DN, 50), bgcolor = color.new(C_DN, 82))
+        rewBox  := box.new(bar_index, math.max(pEntry, pT2), bar_index + 1, math.min(pEntry, pT2), border_color = color.new(C_UP, 50), bgcolor = color.new(C_UP, 86))
+        t1Line  := line.new(bar_index, pT1, bar_index + 1, pT1, color = color.new(C_UP, 20), style = line.style_dashed)
+    int sc = longSetup ? longScore : shortScore
+    string tip = "趋势 " + str.tostring(longSetup ? lTrend : sTrend) + "/25\n动量 " + str.tostring(longSetup ? lMom : sMom) + "/20\n强度 " + str.tostring(longSetup ? lStr : sStr) + "/15\n量能 " + str.tostring(longSetup ? lVol : sVol) + "/15\n大周期 " + str.tostring(longSetup ? lHtf : sHtf) + "/25\n（纸面，不下单）"
+    label.new(bar_index, longSetup ? low : high, (longSetup ? "▲ 偏多 " : "▼ 偏空 ") + str.tostring(sc), style = longSetup ? label.style_label_up : label.style_label_down, color = longSetup ? C_UP : C_DN, textcolor = color.white, size = size.small, tooltip = tip)
+
+rNow = (pStatus == "OPEN" or pStatus == "T1_HIT") and pRisk > 0 ? (close - pEntry) * (pSide == "LONG" ? 1 : -1) / pRisk : na
+
+// ───── 画图 ─────
+pF = plot(emaF, "EMA 快", color = C_FAST, linewidth = 1)
+pM = plot(emaM, "EMA 中", color = C_MID, linewidth = 1)
+fill(pF, pM, color = emaF > emaM ? color.new(C_UP, 86) : color.new(C_DN, 86), title = "EMA 带")
+plot(emaS, "EMA 慢", color = color.new(C_SLOW, 10), linewidth = 2)
+plot(vwapV, "VWAP", color = color.new(C_DIM, 40), linewidth = 1)
+plot(pdh, "前日高 PDH", color = color.new(C_LVL, 20), style = plot.style_stepline)
+plot(pdl, "前日低 PDL", color = color.new(C_LVL, 20), style = plot.style_stepline)
+plotshape(showSwing and not na(ph), "摆动高点", shape.circle, location.abovebar, color.new(C_DN, 30), offset = -swingLen, size = size.tiny)
+plotshape(showSwing and not na(pl), "摆动低点", shape.circle, location.belowbar, color.new(C_UP, 30), offset = -swingLen, size = size.tiny)
+plotshape(showSwing and brk == "BREAK_UP", "向上突破", shape.triangleup, location.belowbar, C_UP, text = "破高", textcolor = C_UP, size = size.tiny)
+plotshape(showSwing and brk == "BREAK_DOWN", "向下突破", shape.triangledown, location.abovebar, C_DN, text = "破低", textcolor = C_DN, size = size.tiny)
+
+// ───── 研究面板 ─────
+tPos = panelPos == "右下" ? position.bottom_right : panelPos == "左上" ? position.top_left : position.top_right
+var table panel = table.new(tPos, 2, 13, bgcolor = color.new(C_BG, 5), frame_color = #30363d, frame_width = 1, border_color = #21262d, border_width = 1)
+
+f_row(int r, string k, string v, color vc) =>
+    table.cell(panel, 0, r, k, text_color = C_DIM, text_size = size.small, text_halign = text.align_left)
+    table.cell(panel, 1, r, v, text_color = vc, text_size = size.small, text_halign = text.align_right)
+
+if showPanel and barstate.isfirst
+    table.merge_cells(panel, 0, 0, 1, 0)
+    table.merge_cells(panel, 0, 1, 1, 1)
+    table.merge_cells(panel, 0, 12, 1, 12)
+
+if showPanel and barstate.islast
+    bool live = pStatus == "OPEN" or pStatus == "T1_HIT"
+    string sigTxt = live ? (pSide == "LONG" ? "偏多" : "偏空") : longScore >= thr and longScore > shortScore ? "偏多" : shortScore >= thr and shortScore > longScore ? "偏空" : "观望"
+    color sigCol = sigTxt == "偏多" ? C_UP : sigTxt == "偏空" ? C_DN : #6e7681
+    int top = math.max(longScore, shortScore)
+    bool useLong = longScore >= shortScore
+    int aligned = useLong ? (lTrend == 25 ? 1 : 0) + (lMom == 20 ? 1 : 0) + (lStr == 15 ? 1 : 0) + (lVol >= 8 ? 1 : 0) + (lHtf == 25 ? 1 : 0) : (sTrend == 25 ? 1 : 0) + (sMom == 20 ? 1 : 0) + (sStr == 15 ? 1 : 0) + (sVol >= 8 ? 1 : 0) + (sHtf == 25 ? 1 : 0)
+    table.cell(panel, 0, 0, "研究面板 · " + syminfo.ticker + " · " + timeframe.period, text_color = C_TXT, bgcolor = #161b22, text_size = size.small)
+    table.cell(panel, 0, 1, sigTxt + "  " + str.tostring(top), text_color = color.white, bgcolor = sigCol, text_size = size.large)
+    f_row(2, "纸面状态", f_zhStatus(pStatus), live ? C_TXT : C_DIM)
+    f_row(3, "市场状态", f_zhRegime(regime), regime == "TREND_UP" ? C_UP : regime == "TREND_DOWN" ? C_DN : C_TXT)
+    f_row(4, "多 / 空", str.tostring(longScore) + " / " + str.tostring(shortScore), C_TXT)
+    f_row(5, "共振", str.tostring(aligned) + " / 5 项", C_TXT)
+    f_row(6, "入场 / 止损", pSide != "NONE" ? f_px(pEntry) + " / " + (pStop == pEntry ? "移到入场" : f_px(pStop)) : "—", C_TXT)
+    f_row(7, "目标 1 / 2", pSide != "NONE" ? f_px(pT1) + " / " + f_px(pT2) : "—", C_UP)
+    f_row(8, "当前 R", na(rNow) ? "—" : (rNow >= 0 ? "+" : "") + str.tostring(rNow, "0.00") + "R", na(rNow) ? C_DIM : rNow >= 0 ? C_UP : C_DN)
+    f_row(9, "大周期 / RSI / ADX", htfBias + " · " + str.tostring(rsiV, "0") + " · " + str.tostring(adxV, "0"), C_TXT)
+    f_row(10, "K线", f_zhPattern(pattern), C_TXT)
+    f_row(11, "结构", lastBreak == "BREAK_UP" ? "最近一次：破高" : lastBreak == "BREAK_DOWN" ? "最近一次：破低" : "无突破", C_TXT)
+    table.cell(panel, 0, 12, "纸面研究 · 不下单 · 最终我自己决定", text_color = C_DIM, text_size = size.tiny)
+
+// ───── 数据包：收盘后发给 AI 研究员 ─────
+if ready and barstate.isconfirmed and (sendMode == "每根K线" or evt != "BAR_CLOSE")
+    string last5 = ""
+    for i = 4 to 0
+        string d = close[i] > open[i] ? "bull" : close[i] < open[i] ? "bear" : "flat"
+        float r = high[i] - low[i]
+        string bp = r > 0 ? str.tostring(100 * math.abs(close[i] - open[i]) / r, "0.0") : "0"
+        last5 += "{" + f_kv("ago", str.tostring(i)) + "," + f_kv("o", f_px(open[i])) + "," + f_kv("h", f_px(high[i])) + "," + f_kv("l", f_px(low[i])) + "," + f_kv("c", f_px(close[i])) + "," + f_kv("v", f_num(volume[i], "0.###")) + "," + f_kv("dir", f_str(d)) + "," + f_kv("body_pct", bp) + "," + f_kv("range_atr", f_num(atrV[i] > 0 ? r / atrV[i] : na, "0.00")) + "," + f_kv("pattern", f_str(pattern[i])) + "}" + (i > 0 ? "," : "")
+
+    string side = pSide + ":" + pStatus
+    string jBar = "{" + f_kv("o", f_px(open)) + "," + f_kv("h", f_px(high)) + "," + f_kv("l", f_px(low)) + "," + f_kv("c", f_px(close)) + "," + f_kv("v", f_num(volume, "0.###")) + "," + f_kv("dir", f_str(dirTxt)) + "," + f_kv("body_pct", f_num(bodyPct, "0.0")) + "," + f_kv("upper_wick_pct", f_num(upPct, "0.0")) + "," + f_kv("lower_wick_pct", f_num(loPct, "0.0")) + "," + f_kv("range_atr", f_num(rngAtr, "0.00")) + "," + f_kv("close_pos_pct", f_num(closePos, "0.0")) + "," + f_kv("gap_pct", f_num(gapPct, "0.000")) + "," + f_kv("pattern", f_str(pattern)) + "}"
+    string jTrend = "{" + f_kv("ema20", f_px(emaF)) + "," + f_kv("ema50", f_px(emaM)) + "," + f_kv("ema200", f_px(emaS)) + "," + f_kv("stack", f_str(stack)) + "," + f_kv("ema200_slope", f_str(slope)) + "," + f_kv("htf", f_str(htfTf)) + "," + f_kv("htf_bias", f_str(htfBias)) + "}"
+    string jOsc = "{" + f_kv("rsi", f_num(rsiV, "0.0")) + "," + f_kv("macd_hist", f_num(macdHist, "0.00")) + "," + f_kv("macd_hist_up", f_bool(histUp)) + "," + f_kv("adx", f_num(adxV, "0.0")) + "," + f_kv("di_plus", f_num(diP, "0.0")) + "," + f_kv("di_minus", f_num(diM, "0.0")) + "}"
+    string jVol = "{" + f_kv("rel_volume", f_num(relVol, "0.00")) + "," + f_kv("atr", f_num(atrV, "0.00")) + "," + f_kv("atr_pctile", f_num(atrRank, "0")) + "}"
+    string jStruct = "{" + f_kv("swing_high", f_px(swingH)) + "," + f_kv("swing_low", f_px(swingL)) + "," + f_kv("event", f_str(brk)) + "," + f_kv("last_break", f_str(lastBreak)) + "," + f_kv("bars_since_break", na(lastBreakBar) ? "null" : str.tostring(bar_index - lastBreakBar)) + "}"
+    string jLvl = "{" + f_kv("pdh", f_px(pdh)) + "," + f_kv("pdl", f_px(pdl)) + "," + f_kv("vwap", f_px(vwapV)) + "}"
+    string jLP = "{" + f_kv("trend", str.tostring(lTrend)) + "," + f_kv("momentum", str.tostring(lMom)) + "," + f_kv("strength", str.tostring(lStr)) + "," + f_kv("volume", str.tostring(lVol)) + "," + f_kv("htf", str.tostring(lHtf)) + "}"
+    string jSP = "{" + f_kv("trend", str.tostring(sTrend)) + "," + f_kv("momentum", str.tostring(sMom)) + "," + f_kv("strength", str.tostring(sStr)) + "," + f_kv("volume", str.tostring(sVol)) + "," + f_kv("htf", str.tostring(sHtf)) + "}"
+    string jScore = "{" + f_kv("long", str.tostring(longScore)) + "," + f_kv("short", str.tostring(shortScore)) + "," + f_kv("threshold", str.tostring(thr)) + "," + f_kv("long_parts", jLP) + "," + f_kv("short_parts", jSP) + "}"
+    string jPaper = "{" + f_kv("side", f_str(pSide)) + "," + f_kv("status", f_str(pStatus)) + "," + f_kv("entry", f_px(pEntry)) + "," + f_kv("stop", f_px(pStop)) + "," + f_kv("t1", f_px(pT1)) + "," + f_kv("t2", f_px(pT2)) + "," + f_kv("r_now", f_num(rNow, "0.00")) + "," + f_kv("bars_open", str.tostring(pBars)) + "," + f_kv("update", upd == "NONE" ? "null" : f_str(upd)) + "}"
+
+    string head = f_kv("schema", f_str("candle-json/v2")) + "," + f_kv("event", f_str(evt)) + "," + f_kv("symbol", f_str(syminfo.prefix + ":" + syminfo.ticker)) + "," + f_kv("tf", f_str(timeframe.period)) + "," + f_kv("bar_close_utc", f_str(str.format_time(time_close, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC"))) + "," + f_kv("summary", f_str("CJ|" + syminfo.ticker + "|" + timeframe.period + "|" + regime + "|L" + str.tostring(longScore) + "|S" + str.tostring(shortScore) + "|" + side)) + "," + f_kv("paper_only", "true")
+    string packet = "{" + head + "," + f_kv("bar", jBar) + "," + f_kv("last5", "[" + last5 + "]") + "," + f_kv("regime", f_str(regime)) + "," + f_kv("trend", jTrend) + "," + f_kv("osc", jOsc) + "," + f_kv("vol", jVol) + "," + f_kv("structure", jStruct) + "," + f_kv("levels", jLvl) + "," + f_kv("score", jScore) + "," + f_kv("paper", jPaper) + "}"
+    alert(packet, alert.freq_once_per_bar_close)
