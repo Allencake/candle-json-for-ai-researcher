@@ -1,0 +1,25 @@
+{
+  "decision": "偏空",
+  "confidence": null,
+  "paper_plan": {
+    "entry": 73940.51,
+    "stop": 74651.85,
+    "t1": 72873.5,
+    "t2": 71806.49
+  },
+  "candle_read": "NONE，收在区间 8.5% 位置，量比 0.51",
+  "reasons": [
+    "RANGE · 多 5 / 空 72 · 大周期 DOWN"
+  ],
+  "concerns": [
+    "dry-run 只复述指标分数，没有做真正的研究"
+  ],
+  "invalidation": "触及纸面止损 74651.85",
+  "why_wrong": "这是规则占位，不是模型判断",
+  "missing_data": [
+    "配置 ANTHROPIC_API_KEY 和 CJ_MODEL 后才有真正的研究结论"
+  ],
+  "next_check": "下一根 K 线收盘",
+  "note": "纸面研究，不下单，最终由我决定",
+  "source": "dry-run"
+}

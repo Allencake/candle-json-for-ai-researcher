@@ -1,0 +1,151 @@
+{
+  "schema": "candle-json/v2",
+  "event": "BAR_CLOSE",
+  "symbol": "BINANCE:BTCUSDT",
+  "tf": "60",
+  "bar_close_utc": "2026-11-14T16:00:00Z",
+  "summary": "CJ|BTCUSDT|60|TREND_DOWN|L0|S90|SHORT:T2_HIT",
+  "paper_only": true,
+  "bar": {
+    "o": 65914.02,
+    "h": 66047.37,
+    "l": 65066.66,
+    "c": 65742.01,
+    "v": 3041.274,
+    "dir": "bear",
+    "body_pct": 17.5,
+    "upper_wick_pct": 13.6,
+    "lower_wick_pct": 68.9,
+    "range_atr": 1.66,
+    "close_pos_pct": 68.9,
+    "gap_pct": 0.0,
+    "pattern": "HAMMER"
+  },
+  "last5": [
+    {
+      "ago": 4,
+      "o": 67292.0,
+      "h": 67365.27,
+      "l": 67119.32,
+      "c": 67272.79,
+      "v": 639.265,
+      "dir": "bear",
+      "body_pct": 7.8,
+      "range_atr": 0.46,
+      "pattern": "DOJI"
+    },
+    {
+      "ago": 3,
+      "o": 67272.79,
+      "h": 67322.87,
+      "l": 66915.84,
+      "c": 66998.18,
+      "v": 620.591,
+      "dir": "bear",
+      "body_pct": 67.5,
+      "range_atr": 0.78,
+      "pattern": "NONE"
+    },
+    {
+      "ago": 2,
+      "o": 66998.18,
+      "h": 67029.3,
+      "l": 66543.34,
+      "c": 66839.18,
+      "v": 1580.241,
+      "dir": "bear",
+      "body_pct": 32.7,
+      "range_atr": 0.93,
+      "pattern": "NONE"
+    },
+    {
+      "ago": 1,
+      "o": 66839.19,
+      "h": 66873.14,
+      "l": 65802.73,
+      "c": 65914.01,
+      "v": 2837.068,
+      "dir": "bear",
+      "body_pct": 86.4,
+      "range_atr": 1.91,
+      "pattern": "BEAR_MARUBOZU"
+    },
+    {
+      "ago": 0,
+      "o": 65914.02,
+      "h": 66047.37,
+      "l": 65066.66,
+      "c": 65742.01,
+      "v": 3041.274,
+      "dir": "bear",
+      "body_pct": 17.5,
+      "range_atr": 1.66,
+      "pattern": "HAMMER"
+    }
+  ],
+  "regime": "TREND_DOWN",
+  "trend": {
+    "ema20": 67369.23,
+    "ema50": 68912.88,
+    "ema200": 72782.16,
+    "stack": "BEAR",
+    "ema200_slope": "DOWN",
+    "htf": "240",
+    "htf_bias": "DOWN"
+  },
+  "osc": {
+    "rsi": 22.7,
+    "macd_hist": -56.18,
+    "macd_hist_up": false,
+    "adx": 50.9,
+    "di_plus": 7.2,
+    "di_minus": 43.1
+  },
+  "vol": {
+    "rel_volume": 2.86,
+    "atr": 589.67,
+    "atr_pctile": 71.0
+  },
+  "structure": {
+    "swing_high": 67523.05,
+    "swing_low": 66456.0,
+    "event": "NONE",
+    "last_break": "BREAK_DOWN",
+    "bars_since_break": 1
+  },
+  "levels": {
+    "pdh": 71514.01,
+    "pdl": 67568.0,
+    "vwap": 66849.41
+  },
+  "score": {
+    "long": 0,
+    "short": 90,
+    "threshold": 70,
+    "long_parts": {
+      "trend": 0,
+      "momentum": 0,
+      "strength": 0,
+      "volume": 0,
+      "htf": 0
+    },
+    "short_parts": {
+      "trend": 25,
+      "momentum": 10,
+      "strength": 15,
+      "volume": 15,
+      "htf": 25
+    }
+  },
+  "paper": {
+    "side": "SHORT",
+    "status": "T2_HIT",
+    "entry": 73940.51,
+    "stop": 73940.51,
+    "t1": 72873.5,
+    "t2": 71806.49,
+    "r_now": null,
+    "bars_open": 16,
+    "update": null
+  }
+}
