@@ -1,8 +1,8 @@
 # K线转JSON · AI 研究台（candle-json v2）
 
-**把每根收盘 K 线拆成一份 JSON，交给 AI 当研究员。它只给纸面结论，不下单，最后由你自己决定。**
+**把每根收盘 K 线拆成一份 JSON，交给 AI 当研究员。它告诉你偏多、偏空、观望还是跳过，给出入场、止损和目标。**
 
-> English: A TradingView Pine v6 indicator that turns every closed candle into a structured JSON packet (candle anatomy, last 5 bars, regime, EMA stack, RSI/MACD/ADX, volume, structure, key levels, long/short scores, paper risk map) and sends it to your AI researcher via webhook. A small Flask receiver stores packets, builds the prompt, optionally calls the Anthropic API, and keeps a paper journal. Research only. There is no order-placing code anywhere in this repo.
+> English: A TradingView Pine v6 indicator that turns every closed candle into a structured JSON packet (candle anatomy, last 5 bars, regime, EMA stack, RSI/MACD/ADX, volume, structure, key levels, long/short scores, risk map) and sends it to your AI researcher via webhook. A small Flask receiver stores packets, builds the prompt, optionally calls the Anthropic API, and keeps a trade journal.
 
 Pine Script v6 · Python 3 · MIT
 
@@ -23,7 +23,7 @@ Pine Script v6 · Python 3 · MIT
 - **量能与波动**：量比、ATR、ATR 百分位
 - **结构与关键位**：摆动高低点和突破、前日高低、VWAP
 - **多空分 0–100**：五项拆分（趋势 25 / 动量 20 / 强度 15 / 量能 15 / 大周期 25）
-- **纸面风险地图**：入场、1.5×ATR 止损、1.5R / 3R 目标、当前状态
+- **风险地图**：入场、1.5×ATR 止损、1.5R / 3R 目标、当前状态
 
 字段说明：[docs/PACKET_SCHEMA.md](docs/PACKET_SCHEMA.md) · 真实样例：[examples/sample_packet.json](examples/sample_packet.json)
 
@@ -32,9 +32,9 @@ Pine Script v6 · Python 3 · MIT
 ```
 TradingView 图表                 你的接收端 / AI                         你
 ┌──────────────────┐  Webhook  ┌───────────────────────────────┐    ┌──────────────┐
-│ CJ 研究台指标     │ ────────► │ receiver.py 存包、拼提示词      │ ─► │ 看纸面结论    │
+│ CJ 研究台指标     │ ────────► │ receiver.py 存包、拼提示词      │ ─► │ 看 AI 结论    │
 │ 收盘 → 一行 JSON  │           │ 研究员：偏多/偏空/观望/跳过      │    │ 自己决定做不做 │
-└──────────────────┘           │ 写纸面日志，跟踪 T1 / 止损       │    └──────────────┘
+└──────────────────┘           │ 写交易日志，跟踪 T1 / 止损       │    └──────────────┘
                                └───────────────────────────────┘
 ```
 
@@ -47,7 +47,7 @@ TradingView 图表                 你的接收端 / AI                         
 1. 打开 [`candle_json_v2.pine`](candle_json_v2.pine)，全部复制。
 2. TradingView 图表底部打开 **Pine Editor**，清空默认代码，粘贴，保存，**添加到图表**。
 
-图上会出现：EMA 带（20/50 + 200）、前日高低和 VWAP、摆动点和“破高 / 破低”标记、▲偏多 / ▼偏空 分数标签、纸面风险框（红色止损区、绿色目标区、虚线目标 1），右上角是**研究面板**。
+图上会出现：EMA 带（20/50 + 200）、前日高低和 VWAP、摆动点和“破高 / 破低”标记、▲偏多 / ▼偏空 分数标签、风险框（红色止损区、绿色目标区、虚线目标 1），右上角是**研究面板**。
 
 ### 2. 建一个提醒
 
@@ -90,7 +90,7 @@ export CJ_MODEL=...   # 你在 Anthropic 控制台看到的模型 ID，比如 Fa
 | `packets/history.jsonl` | 所有数据包 |
 | `last_prompt.md` | 最近一次拼好的提示词 |
 | `journal.jsonl` | 每根 K 线的研究结论 |
-| `paper_book.json` | 纸面账本：进行中 / 已结束，T1 到达后止损移到入场 |
+| `paper_book.json` | 交易账本：进行中 / 已结束，T1 到达后止损移到入场 |
 
 ### 不开 TradingView 先试一下
 
@@ -103,7 +103,7 @@ python receiver.py --replay examples/replay_packets.jsonl      # 把回放的数
 
 ### 也可以不用接收端
 
-- **Claude Code**：在仓库目录里打开，让它“按 `prompts/researcher.md` 读 `data/packets/latest.json`，给我这根 K 线的纸面结论”。
+- **Claude Code**：在仓库目录里打开，让它“按 `prompts/researcher.md` 读 `data/packets/latest.json`，给我这根 K 线的结论”。
 - **n8n / Make**：Webhook 触发 → AI 节点（系统提示词用 `prompts/researcher.md`，用户消息是数据包）→ 推到 Telegram。
 
 ---
@@ -121,16 +121,6 @@ python receiver.py --replay examples/replay_packets.jsonl      # 把回放的数
 
 ---
 
-## 和原版的关系
-
-思路来自 [roan-maverick/tradingview-indicator-for-ai-agents](https://github.com/roan-maverick/tradingview-indicator-for-ai-agents)（AI Agent Lens，MIT），感谢原作者。
-这里的 Pine、接收端、提示词和文档都是我们自己重写的，主要区别：
-
-- 打分权重、字段命名、面板都不同，界面和提示词是中文
-- 研究员只给纸面结论：没有仓位大小，没有“交给 AI 自动下单”这一步
-- 接收端自带纸面账本（T1 / 止损 / 保本 / T2 跟踪）和 dry-run 模式
-- 附带 Python 参考实现，样例数据来自真实行情回放
-
 ## 免责声明
 
-仅供学习和研究。不是投资建议，不承诺任何收益。指标和接收端都不下单；任何真实交易都由你自己判断、自己负责。
+仅供学习交流，不构成投资建议，交易有风险。
